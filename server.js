@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const path = require('path');
 const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const { Server } = require('socket.io');
 
 const app = express();
@@ -23,6 +24,12 @@ if (MONGO_URI) {
   console.warn('⚠️ MONGO_URI not set. Running without database persistence.');
 }
 
+const UserSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true, trim: true },
+  passwordHash: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
 const SuggestionSchema = new mongoose.Schema({
   socketId: String,
   username: String,
@@ -37,6 +44,7 @@ const ReportSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+const User = mongoose.model('User', UserSchema);
 const Suggestion = mongoose.model('Suggestion', SuggestionSchema);
 const Report = mongoose.model('Report', ReportSchema);
 
@@ -63,11 +71,9 @@ function broadcastOnlineCount() {
 }
 
 function leaveCurrentChat(socket, notifyPartner = true) {
-  // Clean up if socket was hosting/in a private room
   if (socket.privateRoomCode) {
     const code = socket.privateRoomCode;
-    const roomData = privateRooms.get(code);
-    if (roomData) {
+    if (privateRooms.has(code)) {
       privateRooms.delete(code);
     }
     socket.leave(code);
@@ -98,7 +104,6 @@ function leaveCurrentChat(socket, notifyPartner = true) {
 }
 
 function matchUsers(socket) {
-  // Remove from waiting queue if already present
   waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
 
   const interests = socket.interests || [];
@@ -155,20 +160,70 @@ io.on('connection', (socket) => {
   warnings[socket.id] = 0;
   broadcastOnlineCount();
 
-  // Random Queue Join
+  // --- AUTH: REGISTER ---
+  socket.on('register', async ({ username, password }) => {
+    if (!isDbConnected) {
+      return socket.emit('authError', { message: 'Database not connected yet.' });
+    }
+    const cleanUser = (username || '').trim();
+    if (!cleanUser || !password || password.length < 4) {
+      return socket.emit('authError', { message: 'Enter username & password (min 4 chars).' });
+    }
+    try {
+      const existing = await User.findOne({ username: cleanUser });
+      if (existing) {
+        return socket.emit('authError', { message: 'Username already taken. Click Login instead.' });
+      }
+      const passwordHash = await bcrypt.hash(password, 10);
+      await User.create({ username: cleanUser, passwordHash });
+      socket.username = cleanUser;
+      socket.emit('authSuccess', { username: cleanUser, message: 'Account created!' });
+    } catch (err) {
+      console.error('Register error:', err);
+      socket.emit('authError', { message: 'Registration failed. Try again.' });
+    }
+  });
+
+  // --- AUTH: LOGIN ---
+  socket.on('login', async ({ username, password }) => {
+    if (!isDbConnected) {
+      return socket.emit('authError', { message: 'Database not connected yet.' });
+    }
+    const cleanUser = (username || '').trim();
+    if (!cleanUser || !password) {
+      return socket.emit('authError', { message: 'Enter both username and password.' });
+    }
+    try {
+      const user = await User.findOne({ username: cleanUser });
+      if (!user) {
+        return socket.emit('authError', { message: 'Account not found. Click Register first.' });
+      }
+      const valid = await bcrypt.compare(password, user.passwordHash);
+      if (!valid) {
+        return socket.emit('authError', { message: 'Incorrect password.' });
+      }
+      socket.username = user.username;
+      socket.emit('authSuccess', { username: user.username, message: 'Logged in!' });
+    } catch (err) {
+      console.error('Login error:', err);
+      socket.emit('authError', { message: 'Login failed. Try again.' });
+    }
+  });
+
+  // --- RANDOM QUEUE JOIN ---
   socket.on('join', (data) => {
     leaveCurrentChat(socket, false);
-    socket.username = data.username || 'Anonymous';
+    socket.username = data.username || socket.username || 'Anonymous';
     socket.interests = data.interests || [];
     matchUsers(socket);
   });
 
-  // Create Private Room
+  // --- CREATE PRIVATE ROOM ---
   socket.on('createPrivateRoom', (data) => {
     leaveCurrentChat(socket, false);
     waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
 
-    socket.username = data?.username || 'Anonymous';
+    socket.username = data?.username || socket.username || 'Anonymous';
     socket.interests = data?.interests || [];
 
     const code = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -183,7 +238,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Join Private Room
+  // --- JOIN PRIVATE ROOM ---
   socket.on('joinPrivateRoom', (data) => {
     const code = (data?.roomCode || '').trim().toUpperCase();
     if (!code || !privateRooms.has(code)) {
@@ -200,7 +255,7 @@ io.on('connection', (socket) => {
     leaveCurrentChat(socket, false);
     waitingUsers = waitingUsers.filter(u => u.id !== socket.id);
 
-    socket.username = data?.username || 'Anonymous';
+    socket.username = data?.username || socket.username || 'Anonymous';
     socket.interests = data?.interests || [];
 
     const host = roomData.host;
@@ -233,7 +288,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Messaging
+  // --- MESSAGING ---
   socket.on('message', (data) => {
     if (containsBadWord(data.text)) {
       warnings[socket.id]++;
@@ -251,7 +306,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Typing Indicators
+  // --- TYPING INDICATORS ---
   socket.on('typing', () => {
     if (socket.room) {
       socket.to(socket.room).emit('typing');
@@ -264,7 +319,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Report & Save to MongoDB
+  // --- REPORT -> MONGODB ---
   socket.on('report', async () => {
     if (socket.partner) {
       warnings[socket.partner.id] = (warnings[socket.partner.id] || 0) + 2;
@@ -284,7 +339,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Suggestion Box -> MongoDB
+  // --- SUGGESTION BOX -> MONGODB ---
   socket.on('suggestion', async (data) => {
     const text = (data && data.text ? String(data.text) : '').trim().slice(0, 500);
     if (!text) return;
@@ -303,23 +358,21 @@ io.on('connection', (socket) => {
     socket.emit('suggestionReceived', { message: 'Saved to database! Thanks!' });
   });
 
-  // Skip / Next
+  // --- SKIP / NEXT ---
   socket.on('next', () => {
     const wasPrivate = Boolean(socket.privateRoomCode);
     const oldPartner = socket.partner;
 
     leaveCurrentChat(socket, true);
 
-    // Re-queue old partner only if it was a random chat
     if (oldPartner && !wasPrivate) {
       matchUsers(oldPartner);
     }
 
-    // Re-queue current user into random chat
     matchUsers(socket);
   });
 
-  // Disconnect
+  // --- DISCONNECT ---
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
     delete warnings[socket.id];

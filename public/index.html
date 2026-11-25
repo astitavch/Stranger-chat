@@ -418,33 +418,54 @@
     #username-box {
       background: #2a1f3d;
       border: 1px solid #3d2f5e;
-      padding: 24px;
+      padding: 22px;
       border-radius: 12px;
       width: 100%;
       max-width: 420px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
-      max-height: 92vh;
+      gap: 12px;
+      max-height: 94vh;
       overflow-y: auto;
     }
 
     #username-box h2 { font-size: 1.2rem; color: #fff; }
     #username-box p { font-size: 0.82rem; color: #a78bfa; }
 
-    .modal-input {
+    .auth-box {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
       background: #1a1225;
       border: 1px solid #3d2f5e;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .modal-input {
+      background: #2a1f3d;
+      border: 1px solid #3d2f5e;
       border-radius: 6px;
-      padding: 10px 12px;
+      padding: 9px 12px;
       color: #e2d9f3;
-      font-size: 16px;
+      font-size: 15px;
       outline: none;
       width: 100%;
       -webkit-appearance: none;
     }
 
     .modal-input:focus { border-color: #7c3aed; }
+
+    .auth-btn-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    #auth-status {
+      font-size: 0.78rem;
+      min-height: 15px;
+      color: #23a55a;
+    }
 
     #interests-container {
       display: flex;
@@ -503,7 +524,7 @@
       color: #fff;
       border: none;
       border-radius: 6px;
-      padding: 12px;
+      padding: 11px;
       font-size: 0.95rem;
       font-weight: 600;
       cursor: pointer;
@@ -524,10 +545,10 @@
       background: #1a1225;
       border: 1px solid #3d2f5e;
       border-radius: 8px;
-      padding: 12px;
+      padding: 10px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
     }
 
     #private-room-row {
@@ -565,7 +586,7 @@
     #modal-error {
       color: #ed4245;
       font-size: 0.78rem;
-      min-height: 16px;
+      min-height: 15px;
     }
 
     #history-view {
@@ -621,10 +642,20 @@
 <div id="username-modal">
   <div id="username-box">
     <h2>👋 Welcome to StrangerChat</h2>
-    <p>Set your username and pick interests to find like-minded strangers!</p>
-    <input class="modal-input" type="text" id="username-input" placeholder="Enter username..." maxlength="20" />
+    <p>Log in or register an account (or enter a guest nickname) to start chatting!</p>
+
+    <div class="auth-box">
+      <input class="modal-input" type="text" id="username-input" placeholder="Login ID / Username..." maxlength="20" />
+      <input class="modal-input" type="password" id="password-input" placeholder="Password (for account login/register)..." maxlength="30" />
+      <div class="auth-btn-row">
+        <button class="secondary-btn" id="login-btn" style="flex:1;">🔑 Login</button>
+        <button class="secondary-btn" id="register-btn" style="flex:1;">📝 Register</button>
+      </div>
+      <div id="auth-status"></div>
+    </div>
+
     <div>
-      <p style="margin-bottom:8px;">Quick interests</p>
+      <p style="margin-bottom:6px;">Quick interests</p>
       <div id="interests-container">
         <span class="interest-tag" data-interest="Gaming">🎮 Gaming</span>
         <span class="interest-tag" data-interest="Music">🎵 Music</span>
@@ -638,6 +669,7 @@
         <span class="interest-tag" data-interest="Art">🎨 Art</span>
       </div>
     </div>
+
     <div>
       <p style="margin-bottom:6px;">Add custom interest</p>
       <div id="custom-interest-row">
@@ -653,7 +685,7 @@
     <div id="private-room-section">
       <div id="private-room-row">
         <button class="secondary-btn" id="create-room-btn">🔒 Create Room</button>
-        <input type="text" id="room-code-input" placeholder="Enter 6-char code" maxlength="6" />
+        <input type="text" id="room-code-input" placeholder="6-char code" maxlength="6" />
         <button class="secondary-btn" id="join-room-btn">Join</button>
       </div>
       <div id="modal-error"></div>
@@ -732,6 +764,7 @@
   const chatHistory = document.getElementById('chat-history');
   const onlineCountBadge = document.getElementById('online-count');
   const modalError = document.getElementById('modal-error');
+  const authStatus = document.getElementById('auth-status');
 
   let username = 'You';
   let typingTimeout;
@@ -785,21 +818,49 @@
     return username;
   }
 
-  // Random Chat Start
+  // --- AUTH EVENTS ---
+  document.getElementById('login-btn').addEventListener('click', () => {
+    const u = document.getElementById('username-input').value.trim();
+    const p = document.getElementById('password-input').value;
+    authStatus.style.color = '#a78bfa';
+    authStatus.textContent = 'Logging in...';
+    socket.emit('login', { username: u, password: p });
+  });
+
+  document.getElementById('register-btn').addEventListener('click', () => {
+    const u = document.getElementById('username-input').value.trim();
+    const p = document.getElementById('password-input').value;
+    authStatus.style.color = '#a78bfa';
+    authStatus.textContent = 'Creating account...';
+    socket.emit('register', { username: u, password: p });
+  });
+
+  socket.on('authSuccess', (data) => {
+    username = data.username;
+    authStatus.style.color = '#23a55a';
+    authStatus.textContent = `✓ ${data.message} Welcome, ${data.username}`;
+  });
+
+  socket.on('authError', (data) => {
+    authStatus.style.color = '#ed4245';
+    authStatus.textContent = `❌ ${data.message}`;
+  });
+
+  // --- RANDOM CHAT START ---
   document.getElementById('start-btn').addEventListener('click', () => {
     getUsername();
     document.getElementById('username-modal').style.display = 'none';
     socket.emit('join', { username, interests: selectedInterests });
   });
 
-  // Private Room Create
+  // --- PRIVATE ROOM CREATE ---
   document.getElementById('create-room-btn').addEventListener('click', () => {
     getUsername();
     modalError.textContent = '';
     socket.emit('createPrivateRoom', { username, interests: selectedInterests });
   });
 
-  // Private Room Join
+  // --- PRIVATE ROOM JOIN ---
   document.getElementById('join-room-btn').addEventListener('click', () => {
     const code = document.getElementById('room-code-input').value.trim();
     if (!code) {
@@ -923,7 +984,7 @@
     });
   }
 
-  // SOCKET EVENTS
+  // --- SOCKET EVENTS ---
   socket.on('onlineCount', (data) => {
     onlineCountBadge.textContent = `${data.count} online`;
   });
