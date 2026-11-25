@@ -25,19 +25,32 @@
     }
 
     #sidebar-header {
-      padding: 16px 12px 8px;
+      padding: 16px 12px 10px;
       font-size: 0.85rem;
       font-weight: 700;
       color: #c4b5fd;
       text-transform: uppercase;
       letter-spacing: 0.5px;
       border-bottom: 1px solid #3d2f5e;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
 
     #sidebar-header h1 {
       font-size: 1rem;
       color: #fff;
-      margin-bottom: 4px;
+    }
+
+    .online-badge {
+      background: #1a1225;
+      border: 1px solid #3d2f5e;
+      color: #23a55a;
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      border-radius: 12px;
+      text-transform: none;
+      font-weight: 600;
     }
 
     #status-row {
@@ -408,11 +421,11 @@
       padding: 24px;
       border-radius: 12px;
       width: 100%;
-      max-width: 400px;
+      max-width: 420px;
       display: flex;
       flex-direction: column;
       gap: 14px;
-      max-height: 90vh;
+      max-height: 92vh;
       overflow-y: auto;
     }
 
@@ -499,6 +512,62 @@
 
     #start-btn:hover { background: #6d28d9; }
 
+    .divider-text {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #6d5a8a;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    #private-room-section {
+      background: #1a1225;
+      border: 1px solid #3d2f5e;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    #private-room-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    #room-code-input {
+      flex: 1;
+      background: #2a1f3d;
+      border: 1px solid #3d2f5e;
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #e2d9f3;
+      font-size: 14px;
+      text-transform: uppercase;
+      outline: none;
+      min-width: 0;
+    }
+
+    .secondary-btn {
+      background: #3d2f5e;
+      color: #e2d9f3;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .secondary-btn:hover { background: #4c3575; }
+
+    #modal-error {
+      color: #ed4245;
+      font-size: 0.78rem;
+      min-height: 16px;
+    }
+
     #history-view {
       display: none;
       flex: 1;
@@ -576,13 +645,26 @@
         <button id="add-interest-btn">+ Add</button>
       </div>
     </div>
-    <button id="start-btn">Start Chatting →</button>
+
+    <button id="start-btn">Random Stranger Chat →</button>
+
+    <div class="divider-text">— or Private Room —</div>
+
+    <div id="private-room-section">
+      <div id="private-room-row">
+        <button class="secondary-btn" id="create-room-btn">🔒 Create Room</button>
+        <input type="text" id="room-code-input" placeholder="Enter 6-char code" maxlength="6" />
+        <button class="secondary-btn" id="join-room-btn">Join</button>
+      </div>
+      <div id="modal-error"></div>
+    </div>
   </div>
 </div>
 
 <div id="sidebar">
   <div id="sidebar-header">
     <h1>💬 StrangerChat</h1>
+    <span class="online-badge" id="online-count">1 online</span>
   </div>
   <div id="status-row">
     <span id="status-dot"></span>
@@ -648,9 +730,12 @@
   const headerName = document.getElementById('header-name');
   const headerInterests = document.getElementById('header-interests');
   const chatHistory = document.getElementById('chat-history');
+  const onlineCountBadge = document.getElementById('online-count');
+  const modalError = document.getElementById('modal-error');
 
   let username = 'You';
   let typingTimeout;
+  let emitTypingTimeout;
   let currentStranger = null;
   let chatSessions = [];
   let currentSession = null;
@@ -694,11 +779,36 @@
     document.getElementById('custom-interest-input').value = '';
   }
 
-  document.getElementById('start-btn').addEventListener('click', () => {
+  function getUsername() {
     const val = document.getElementById('username-input').value.trim();
     username = val || 'Anonymous';
+    return username;
+  }
+
+  // Random Chat Start
+  document.getElementById('start-btn').addEventListener('click', () => {
+    getUsername();
     document.getElementById('username-modal').style.display = 'none';
     socket.emit('join', { username, interests: selectedInterests });
+  });
+
+  // Private Room Create
+  document.getElementById('create-room-btn').addEventListener('click', () => {
+    getUsername();
+    modalError.textContent = '';
+    socket.emit('createPrivateRoom', { username, interests: selectedInterests });
+  });
+
+  // Private Room Join
+  document.getElementById('join-room-btn').addEventListener('click', () => {
+    const code = document.getElementById('room-code-input').value.trim();
+    if (!code) {
+      modalError.textContent = 'Please enter a 6-character room code.';
+      return;
+    }
+    getUsername();
+    modalError.textContent = '';
+    socket.emit('joinPrivateRoom', { username, interests: selectedInterests, roomCode: code });
   });
 
   function addMessage(text, type, label) {
@@ -728,8 +838,8 @@
     chatBox.scrollTop = chatBox.scrollHeight;
   }
 
-  function updateHeader(name, interests, commonInterests) {
-    headerName.textContent = '# ' + name;
+  function updateHeader(name, interests, commonInterests, isPrivate, roomCode) {
+    headerName.textContent = isPrivate ? `🔒 Private (${roomCode}) — ${name}` : `# ${name}`;
     headerInterests.innerHTML = '';
     if (interests && interests.length > 0) {
       interests.forEach(i => {
@@ -814,6 +924,25 @@
   }
 
   // SOCKET EVENTS
+  socket.on('onlineCount', (data) => {
+    onlineCountBadge.textContent = `${data.count} online`;
+  });
+
+  socket.on('privateRoomCreated', (data) => {
+    document.getElementById('username-modal').style.display = 'none';
+    chatBox.innerHTML = '';
+    statusDot.className = 'searching';
+    sidebarStatus.textContent = `Room: ${data.roomCode}`;
+    headerStatus.textContent = `Code: ${data.roomCode}`;
+    headerName.textContent = `🔒 Private Room (${data.roomCode})`;
+    headerInterests.innerHTML = '';
+    addMessage(data.message, 'system');
+  });
+
+  socket.on('roomError', (data) => {
+    modalError.textContent = data.message;
+  });
+
   socket.on('waiting', (data) => {
     statusDot.className = 'searching';
     sidebarStatus.textContent = 'Searching...';
@@ -824,8 +953,9 @@
   });
 
   socket.on('matched', (data) => {
+    document.getElementById('username-modal').style.display = 'none';
     statusDot.className = 'online';
-    sidebarStatus.textContent = 'Connected';
+    sidebarStatus.textContent = data.isPrivate ? `Private (${data.roomCode})` : 'Connected';
     headerStatus.textContent = 'Connected ✅';
 
     currentStranger = {
@@ -834,10 +964,10 @@
     };
 
     currentSession = { messages: [] };
-    chatBox.innerHTML = '';           // ✅ Clear old messages
-    typingIndicator.textContent = ''; // ✅ Clear leftover typing indicator
+    chatBox.innerHTML = '';
+    typingIndicator.textContent = '';
 
-    updateHeader(data.strangerName, data.strangerInterests, data.commonInterests);
+    updateHeader(data.strangerName, data.strangerInterests, data.commonInterests, data.isPrivate, data.roomCode);
     addMessage(data.message, 'system');
 
     if (data.commonInterests && data.commonInterests.length > 0) {
@@ -876,11 +1006,16 @@
     }, 2000);
   });
 
+  socket.on('stopTyping', () => {
+    typingIndicator.textContent = '';
+  });
+
   socket.on('reported', (data) => addMessage(data.message, 'system'));
 
   function sendMessage() {
     const text = msgInput.value.trim();
     if (!text) return;
+    socket.emit('stopTyping');
     socket.emit('message', { text });
     addMessage(text, 'you', username);
     msgInput.value = '';
@@ -893,6 +1028,10 @@
 
   msgInput.addEventListener('input', () => {
     socket.emit('typing');
+    clearTimeout(emitTypingTimeout);
+    emitTypingTimeout = setTimeout(() => {
+      socket.emit('stopTyping');
+    }, 1500);
   });
 
   document.getElementById('next-btn').addEventListener('click', () => {
@@ -902,7 +1041,7 @@
     currentStranger = null;
     currentSession = null;
     socket.emit('next');
-    chatBox.innerHTML = '';           // ✅ Also clear on Skip
+    chatBox.innerHTML = '';
     typingIndicator.textContent = '';
     statusDot.className = 'searching';
     sidebarStatus.textContent = 'Searching...';
