@@ -314,6 +314,20 @@
       padding: 6px 12px;
     }
 
+    .chat-media-img {
+      max-width: 260px;
+      max-height: 260px;
+      border-radius: 6px;
+      display: block;
+      cursor: pointer;
+    }
+
+    .chat-media-audio {
+      width: 230px;
+      height: 36px;
+      display: block;
+    }
+
     #typing-indicator {
       padding: 2px 16px;
       font-size: 0.78rem;
@@ -377,13 +391,22 @@
 
     #next-btn:hover { background: #3d2f5e; }
 
-    #emoji-btn {
-      background: none;
-      border: none;
-      font-size: 1.3rem;
+    .icon-action-btn {
+      background: #2a1f3d;
+      border: 1px solid #3d2f5e;
+      color: #e2d9f3;
+      border-radius: 8px;
+      font-size: 1.15rem;
       cursor: pointer;
-      padding: 4px;
+      padding: 7px 10px;
       flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .icon-action-btn:hover { background: #3d2f5e; }
+    .icon-action-btn.recording {
+      background: #ed4245;
+      border-color: #ed4245;
+      color: #fff;
     }
 
     #emoji-panel {
@@ -743,7 +766,10 @@
   </div>
 
   <div id="input-area">
-    <button id="emoji-btn">😊</button>
+    <button class="icon-action-btn" id="emoji-btn" title="Emojis">😊</button>
+    <button class="icon-action-btn" id="img-btn" title="Send Image">📷</button>
+    <input type="file" id="img-input" accept="image/*" style="display:none;" />
+    <button class="icon-action-btn" id="voice-btn" title="Click to Record / Stop Voice Note">🎤</button>
     <input type="text" id="msg-input" placeholder="Message stranger..." inputmode="text" autocomplete="off" />
     <button id="next-btn">Skip ⏭</button>
     <button id="send-btn">Send</button>
@@ -899,6 +925,141 @@
     chatBox.scrollTop = chatBox.scrollHeight;
   }
 
+  function addMediaMessage(mediaType, dataUrl, senderType, label) {
+    if (currentSession) {
+      currentSession.messages.push({
+        text: mediaType === 'image' ? '📷 [Photo]' : '🎤 [Voice Note]',
+        type: senderType,
+        label
+      });
+    }
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('msg-wrapper', senderType);
+    if (label) {
+      const lbl = document.createElement('div');
+      lbl.classList.add('msg-label');
+      lbl.textContent = label;
+      wrapper.appendChild(lbl);
+    }
+    const bubble = document.createElement('div');
+    bubble.classList.add('msg', senderType);
+
+    if (mediaType === 'image') {
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      img.className = 'chat-media-img';
+      img.alt = 'Shared photo';
+      img.addEventListener('click', () => window.open(dataUrl, '_blank'));
+      bubble.appendChild(img);
+    } else if (mediaType === 'audio') {
+      const audio = document.createElement('audio');
+      audio.controls = true;
+      audio.src = dataUrl;
+      audio.className = 'chat-media-audio';
+      bubble.appendChild(audio);
+    }
+
+    wrapper.appendChild(bubble);
+    chatBox.appendChild(wrapper);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+
+  // --- IMAGE UPLOAD & CLIENT-SIDE COMPRESSION ---
+  const imgBtn = document.getElementById('img-btn');
+  const imgInput = document.getElementById('img-input');
+
+  imgBtn.addEventListener('click', () => {
+    if (!currentStranger) {
+      addMessage('⚠️ Connect with a stranger first before sending photos.', 'warning');
+      return;
+    }
+    imgInput.click();
+  });
+
+  imgInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxDim = 800;
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.78);
+        socket.emit('media', { type: 'image', dataUrl: compressedDataUrl });
+        addMediaMessage('image', compressedDataUrl, 'you', username);
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    imgInput.value = '';
+  });
+
+  // --- VOICE NOTE RECORDING (MediaRecorder) ---
+  const voiceBtn = document.getElementById('voice-btn');
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let isRecording = false;
+
+  voiceBtn.addEventListener('click', async () => {
+    if (!currentStranger) {
+      addMessage('⚠️ Connect with a stranger first before sending voice notes.', 'warning');
+      return;
+    }
+
+    if (!isRecording) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const audioDataUrl = reader.result;
+            socket.emit('media', { type: 'audio', dataUrl: audioDataUrl });
+            addMediaMessage('audio', audioDataUrl, 'you', username);
+          };
+          reader.readAsDataURL(blob);
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        voiceBtn.classList.add('recording');
+        voiceBtn.textContent = '⏹';
+        typingIndicator.textContent = '🔴 Recording voice note... click ⏹ to send';
+      } catch (err) {
+        addMessage('❌ Microphone permission denied or unavailable.', 'warning');
+      }
+    } else {
+      mediaRecorder.stop();
+      isRecording = false;
+      voiceBtn.classList.remove('recording');
+      voiceBtn.textContent = '🎤';
+      typingIndicator.textContent = '';
+    }
+  });
+
   function updateHeader(name, interests, commonInterests, isPrivate, roomCode) {
     headerName.textContent = isPrivate ? `🔒 Private (${roomCode}) — ${name}` : `# ${name}`;
     headerInterests.innerHTML = '';
@@ -1039,6 +1200,11 @@
   socket.on('message', (data) => {
     typingIndicator.textContent = '';
     addMessage(data.text, 'stranger', currentStranger?.name || 'Stranger');
+  });
+
+  socket.on('media', (data) => {
+    typingIndicator.textContent = '';
+    addMediaMessage(data.type, data.dataUrl, 'stranger', currentStranger?.name || 'Stranger');
   });
 
   socket.on('warning', (data) => addMessage(data.message, 'warning'));

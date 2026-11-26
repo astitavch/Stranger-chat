@@ -7,7 +7,9 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  maxHttpBufferSize: 5e6 // Allow up to 5MB for compressed images & voice notes
+});
 
 // --- MONGODB SETUP ---
 const MONGO_URI = process.env.MONGO_URI || '';
@@ -288,7 +290,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  // --- MESSAGING ---
+  // --- TEXT MESSAGING ---
   socket.on('message', (data) => {
     if (containsBadWord(data.text)) {
       warnings[socket.id]++;
@@ -304,6 +306,16 @@ io.on('connection', (socket) => {
     if (socket.room) {
       socket.to(socket.room).emit('message', { text: data.text });
     }
+  });
+
+  // --- MEDIA: IMAGES & VOICE NOTES ---
+  socket.on('media', (data) => {
+    if (!socket.room || !data || !data.dataUrl) return;
+    if (data.type !== 'image' && data.type !== 'audio') return;
+    socket.to(socket.room).emit('media', {
+      type: data.type,
+      dataUrl: data.dataUrl
+    });
   });
 
   // --- TYPING INDICATORS ---
